@@ -27,7 +27,7 @@ import org.apache.hadoop.mapred.RecordReader
 
 import org.kiji.annotations.ApiAudience
 import org.kiji.annotations.ApiStability
-import org.kiji.express.util.GenericCellSpecs
+import org.kiji.express.util.{SpecificCellSpecs, GenericCellSpecs}
 import org.kiji.express.util.Resources.doAndRelease
 import org.kiji.mapreduce.framework.KijiConfKeys
 import org.kiji.schema.HBaseEntityId
@@ -37,8 +37,8 @@ import org.kiji.schema.KijiRowData
 import org.kiji.schema.KijiRowScanner
 import org.kiji.schema.KijiTable
 import org.kiji.schema.KijiTableReader
-import org.kiji.schema.KijiTableReader.KijiScannerOptions
 import org.kiji.schema.KijiURI
+import org.kiji.schema.KijiTableReader.KijiScannerOptions
 import org.kiji.schema.hbase.HBaseScanOptions
 
 /**
@@ -100,7 +100,12 @@ final class KijiRecordReader(
   private val reader: KijiTableReader = {
     doAndRelease(Kiji.Factory.open(inputURI, configuration)) { kiji: Kiji =>
       doAndRelease(kiji.openTable(inputURI.getTable())) { table: KijiTable =>
-        table.getReaderFactory().openTableReader(GenericCellSpecs(table))
+        val serializedOverrides: String =
+            configuration.get(SpecificCellSpecs.CELLSPEC_OVERRIDE_CONF_KEY)
+        val cellSpecOverrides = SpecificCellSpecs.deserializeOverrides(table, serializedOverrides)
+        val completeCellSpecs =
+            SpecificCellSpecs.mergeCellSpecs(GenericCellSpecs(table), cellSpecOverrides)
+        table.getReaderFactory.openTableReader(completeCellSpecs)
       }
     }
   }
