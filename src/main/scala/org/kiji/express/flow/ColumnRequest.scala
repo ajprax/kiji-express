@@ -96,6 +96,15 @@ final case class QualifiedColumn private[express] (
     extends ColumnRequest {
 
   /**
+   * bogus.
+   * @param max bogus.
+   * @return bogus.
+   */
+  def withMaxVersions(max: Int): ColumnRequest = {
+    return new QualifiedColumn(family, qualifier, options.newWithMaxVersions(max))
+  }
+
+  /**
    * Specifies a single value to be used as the default when reading rows missing a value for this
    * column. The value will be used to create a slice for the column with the value at the current
    * timestamp.
@@ -218,6 +227,15 @@ final case class ColumnFamily private[express] (
     qualifierSelector: Option[String] = None,
     options: ColumnRequestOptions = ColumnRequestOptions())
     extends ColumnRequest {
+
+  /**
+   * bogus.
+   * @param max bogus.
+   * @return bogus.
+   */
+  def withMaxVersions(max: Int): ColumnRequest = {
+    return new ColumnFamily(family, qualifierSelector, options.newWithMaxVersions(max))
+  }
 
   /**
    * Specifies a single value, along with its qualifier, to be used as the default when reading rows
@@ -350,6 +368,17 @@ final case class ColumnRequestOptions private[express] (
     avroClass: Option[Class[_ <: SpecificRecord]] = None,
     pageSize: Option[Int] = None)
     extends Serializable {
+
+  def newWithMaxVersions(
+      newMaxVersions: Int): ColumnRequestOptions = {
+    return new ColumnRequestOptions(
+      maxVersions = newMaxVersions,
+      filter = filter,
+      replacementSlice = replacementSlice,
+      avroClass = avroClass,
+      pageSize = pageSize)
+  }
+
   def newWithReplacement(
       newReplacement: Option[KijiSlice[_]]): ColumnRequestOptions = {
     return new ColumnRequestOptions(
