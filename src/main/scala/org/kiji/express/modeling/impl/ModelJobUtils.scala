@@ -56,6 +56,7 @@ import org.kiji.mapreduce.kvstore.lib.{ TextFileKeyValueStore => JTextFileKeyVal
 import org.kiji.schema.KijiColumnName
 import org.kiji.schema.KijiDataRequest
 import org.kiji.schema.KijiURI
+import org.kiji.scoring.FreshenerSetupContext
 
 /**
  * Utility object for the model lifecycle. Transforms the various input, output and key-value
@@ -149,6 +150,32 @@ object ModelJobUtils {
         }
         .toMap
   }
+
+  /**
+   * Wrap the provided key value stores in their scala counterparts.
+   *
+   * @param keyValueStoreSpecs to open.
+   * @param context providing acces to the opened key value stores.
+   * @return a mapping from the keyValueStoreSpec's name to the wrapped keyValueStoreReader.
+   */
+  def wrapKvstoreReaders(
+      keyValueStoreSpecs: Seq[KeyValueStoreSpec],
+      context: FreshenerSetupContext): Map[String, KeyValueStore[_, _]] = {
+    keyValueStoreSpecs.
+        map { keyValueStoreSpec: KeyValueStoreSpec =>
+          val jKeyValueStoreReader = context.getStore(keyValueStoreSpec.name)
+          val wrapped: KeyValueStore[_, _] = keyValueStoreSpec.storeType match {
+            case "AVRO_KV" => new AvroKVRecordKeyValueStore(jKeyValueStoreReader)
+            case "AVRO_RECORD" => new AvroKVRecordKeyValueStore(jKeyValueStoreReader)
+            case "KIJI_TABLE" => new KijiTableKeyValueStore(jKeyValueStoreReader)
+            case "TEXT_FILE" => new TextFileKeyValueStore(
+              jKeyValueStoreReader.asInstanceOf[JKeyValueStoreReader[String, String]])
+          }
+      (keyValueStoreSpec.name, wrapped)
+    }
+    .toMap
+  }
+
 
   /**
    * Open the provided key value store specifications.
