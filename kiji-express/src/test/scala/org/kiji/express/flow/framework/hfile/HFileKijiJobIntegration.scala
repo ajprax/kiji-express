@@ -25,7 +25,6 @@ import com.twitter.scalding.Args
 import com.twitter.scalding.TextLine
 import com.twitter.scalding.Tool
 import com.twitter.scalding.Tsv
-import org.apache.avro.Schema
 import org.apache.commons.io.FileUtils
 import org.apache.hadoop.fs.Path
 import org.junit.After
@@ -34,7 +33,6 @@ import org.junit.Before
 import org.junit.Test
 
 import org.kiji.express.flow.ColumnFamilyOutputSpec
-import org.kiji.express.flow.QualifiedColumnOutputSpec
 import org.kiji.express.flow.EntityId
 import org.kiji.express.flow.util.Resources
 import org.kiji.mapreduce.HFileLoader
@@ -224,7 +222,11 @@ class SimpleAverageJob(args: Args) extends HFileKijiJob(args) {
       (EntityId(parts(0)), parts(1).toInt)
     }
     .groupBy('entityId) { _.average('numViews) }
-    .write(HFileKijiOutput(outputUri, hFileOutput, ('numViews -> "family:double_column")))
+    .write(HFileKijiOutput.builder
+        .withTableURI(outputUri)
+        .withHFileOutput(hFileOutput)
+        .withColumns('numViews -> "family:double_column")
+        .build)
 }
 
 class SimpleLoaderJob(args: Args) extends HFileKijiJob(args) {
@@ -243,7 +245,12 @@ class SimpleLoaderJob(args: Args) extends HFileKijiJob(args) {
       Thread.sleep(2) // Force a sleep so that we get unique timestamps
       (EntityId(parts(0)), parts(1).toDouble, System.currentTimeMillis())
     }
-    .write(HFileKijiOutput(outputUri, hFileOutput, 'ts, ('numViews -> "family:double_column")))
+    .write(HFileKijiOutput.builder
+        .withTableURI(outputUri)
+        .withHFileOutput(hFileOutput)
+        .withTimestampField('ts)
+        .withColumns('numViews -> "family:double_column")
+        .build)
 }
 
 class SimpleLoaderMapTypeFamilyJob(args: Args) extends HFileKijiJob(args) {
@@ -266,7 +273,12 @@ class SimpleLoaderMapTypeFamilyJob(args: Args) extends HFileKijiJob(args) {
       Thread.sleep(2) // Force a sleep so that we get unique timestamps
       (EntityId(parts(0)), parts(1).toInt, System.currentTimeMillis())
     }
-    .write(HFileKijiOutput(outputUri, hFileOutput, 'ts, outputCols))
+    .write(HFileKijiOutput.builder
+        .withTableURI(outputUri)
+        .withHFileOutput(hFileOutput)
+        .withTimestampField('ts)
+        .withColumnSpecs(outputCols)
+        .build)
 }
 
 class SimpleLoaderMultiOutputJob(args: Args) extends HFileKijiJob(args) {
@@ -287,7 +299,11 @@ class SimpleLoaderMultiOutputJob(args: Args) extends HFileKijiJob(args) {
       (EntityId(parts(0)), parts(1).toDouble, System.currentTimeMillis())
     }
 
-  computePipe.write(HFileKijiOutput(outputUri, hFileOutput, 'ts,
-      ('numViews -> "family:double_column")))
+  computePipe.write(HFileKijiOutput.builder
+      .withTableURI(outputUri)
+      .withHFileOutput(hFileOutput)
+      .withTimestampField('ts)
+      .withColumns('numViews -> "family:double_column")
+      .build)
   computePipe.write(Tsv(tsvOutputURI))
 }

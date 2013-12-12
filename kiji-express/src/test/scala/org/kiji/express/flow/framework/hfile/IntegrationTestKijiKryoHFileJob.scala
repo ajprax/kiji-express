@@ -120,15 +120,14 @@ class IntegrationTestKijiKryoHFileJob extends AbstractKijiIntegrationTest {
             Map(ColumnInputSpec("info:email", schema = Schema.create(Schema.Type.STRING))
               -> 'email))
             .debug
-            .write(
-            HFileKijiOutput(
-              table.getURI.toString,
-              tempHFileFolder.getAbsolutePath,
-              Map('email ->
-                QualifiedColumnOutputSpec(
-                  "info",
-                  "email",
-                  schemaSpec = Generic(Schema.create(Schema.Type.STRING))))))
+            .write(HFileKijiOutput.builder
+                .withTableURI(table.getURI.toString)
+                .withHFileOutput(tempHFileFolder.getAbsolutePath)
+                .withColumnSpecs('email -> QualifiedColumnOutputSpec.builder
+                    .withColumn("info", "email")
+                    .withSchemaSpec(Generic(Schema.create(Schema.Type.STRING)))
+                    .build)
+                .build)
         }
         Mode.mode = Hdfs(strict = false, conf = new JobConf(getConf))
         Assert.assertTrue(
