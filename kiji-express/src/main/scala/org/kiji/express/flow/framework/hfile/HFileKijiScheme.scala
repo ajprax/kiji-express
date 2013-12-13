@@ -34,11 +34,7 @@ import org.apache.hadoop.mapred.RecordReader
 import org.kiji.annotations.ApiAudience
 import org.kiji.annotations.ApiStability
 import org.kiji.annotations.Inheritance
-import org.kiji.express.flow.ColumnFamilyOutputSpec
-import org.kiji.express.flow.ColumnOutputSpec
-import org.kiji.express.flow.EntityId
-import org.kiji.express.flow.QualifiedColumnOutputSpec
-import org.kiji.express.flow.TimeRange
+import org.kiji.express.flow._
 import org.kiji.express.flow.framework.KijiScheme
 import org.kiji.express.flow.framework.KijiSourceContext
 import org.kiji.express.flow.framework.serialization.KijiLocker
@@ -54,6 +50,10 @@ import org.kiji.schema.impl.DefaultKijiCellEncoderFactory
 import org.kiji.schema.layout.KijiTableLayout
 import org.kiji.schema.layout.impl.CellEncoderProvider
 import org.kiji.schema.layout.impl.ColumnNameTranslator
+import org.kiji.express.flow.framework.hfile.HFileKijiSinkContext
+import scala.Some
+import org.kiji.express.flow.framework.hfile.HFileCell
+import org.kiji.express.flow.framework.KijiSourceContext
 
 /**
  * A Kiji-specific implementation of a Cascading `Scheme` which defines how to write data
@@ -82,6 +82,7 @@ import org.kiji.schema.layout.impl.ColumnNameTranslator
 @ApiStability.Experimental
 private[express] class HFileKijiScheme(
   private[express] val timeRange: TimeRange,
+  private[express] val entityIdSpec: EntityIdSpec,
   private[express] val timestampField: Option[Symbol],
   private[express] val loggingInterval: Long,
   @transient private[express] val columns: Map[String, ColumnOutputSpec])
@@ -99,7 +100,7 @@ private[express] class HFileKijiScheme(
   // _columns.get.
   val _columns = KijiLocker(columns)
 
-  setSinkFields(buildSinkFields(_columns.get, timestampField))
+  setSinkFields(buildSinkFields(entityIdSpec, _columns.get, timestampField))
 
   /**
    * Sets up any resources required for the MapReduce job. This method is called

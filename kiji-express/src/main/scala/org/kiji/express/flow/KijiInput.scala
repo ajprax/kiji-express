@@ -44,8 +44,10 @@ import org.kiji.schema.KijiColumnName
 @ApiAudience.Public
 @ApiStability.Experimental
 object KijiInput {
-  /** Default time range for KijiSource */
-  private val DEFAULT_TIME_RANGE: TimeRange = All
+  /** Default time range for KijiSource. */
+  val DEFAULT_TIME_RANGE: TimeRange = All
+  /** Default EntityId spec for KijiSource. */
+  val DEFAULT_ENTITYID_SPEC: EntityIdSpec = EntityIdSpec.EntityIdField('entityId)
 
   /**
    * Create a new empty KijiInput.Builder.
@@ -74,13 +76,15 @@ object KijiInput {
   final class Builder private(
       private val consturctorTableURI: Option[String],
       private val constructorTimeRange: Option[TimeRange],
-      private val constructorColumnSpecs: Option[Map[_ <: ColumnInputSpec, Symbol]]
+      private val constructorColumnSpecs: Option[Map[_ <: ColumnInputSpec, Symbol]],
+      private val constructorEntityIdSpec: Option[EntityIdSpec]
   ) {
     private[this] val monitor = new AnyRef
 
     private var mTableURI: Option[String] = consturctorTableURI
     private var mTimeRange: Option[TimeRange] = constructorTimeRange
     private var mColumnSpecs: Option[Map[_ <: ColumnInputSpec, Symbol]] = constructorColumnSpecs
+    private var mEntityIdSpec: Option[EntityIdSpec] = constructorEntityIdSpec
 
     /**
      * Get the Kiji URI of the table from which to read from this Builder.
@@ -102,6 +106,13 @@ object KijiInput {
      * @return the input specifications from this Builder.
      */
     def columnSpecs: Option[Map[_ <: ColumnInputSpec, Symbol]] = mColumnSpecs
+
+    /**
+     * Get the EntityId specifications from this Builder.
+     *
+     * @return the EntityId specifications from this Builder.
+     */
+    def entityIdSpec: Option[EntityIdSpec] = mEntityIdSpec
 
     /**
      * Configure the KijiSource to read values from the table with the given Kiji URI.
@@ -228,6 +239,20 @@ object KijiInput {
     }
 
     /**
+     * Configure the KijiSource to read the EntityId of the row into tuple Fields according to the
+     * given specification. Default is [[org.kiji.express.flow.EntityIdSpec.EntityIdField]] with the
+     * Field 'entityId.
+     *
+     * @param entityIdSpec by which to read the EntityId into tuple Fields.
+     * @return this builder.
+     */
+    def withEntityIdSpec(entityIdSpec: EntityIdSpec): Builder = monitor.synchronized {
+      require(None == mEntityIdSpec, "EntityIdSpec already set to: " + mEntityIdSpec)
+      mEntityIdSpec = Some(entityIdSpec)
+      this
+    }
+
+    /**
      * Build a new KijiSource configured for input from the values stored in this Builder.
      *
      * @return a new KijiSource configured for input from the values stored in this Builder.
@@ -236,6 +261,7 @@ object KijiInput {
       KijiInput(
           tableURI.getOrElse(throw new IllegalArgumentException("Table URI must be specified.")),
           timeRange.getOrElse(DEFAULT_TIME_RANGE),
+          entityIdSpec.getOrElse(DEFAULT_ENTITYID_SPEC),
           columnSpecs.getOrElse(
               throw new IllegalArgumentException("Column input specs must be specified.")))
     }
@@ -254,7 +280,7 @@ object KijiInput {
      *
      * @return a new empty Builder.
      */
-    def apply(): Builder = new Builder(None, None, None)
+    def apply(): Builder = new Builder(None, None, None, None)
 
     /**
      * Create a new Builder as a copy of the given Builder.
@@ -263,7 +289,7 @@ object KijiInput {
      * @return a new Builder as a copy of the given Builder.
      */
     def apply(other: Builder): Builder =
-        new Builder(other.tableURI, other.timeRange, other.columnSpecs)
+        new Builder(other.tableURI, other.timeRange, other.columnSpecs, other.entityIdSpec)
 
     /**
      * Converts a column -> Field mapping to a ColumnInputSpec -> Field mapping.
@@ -296,6 +322,7 @@ object KijiInput {
   private[express] def apply(
       tableUri: String,
       timeRange: TimeRange,
+      entityIdSpec: EntityIdSpec,
       columns: Map[_ <: ColumnInputSpec, Symbol]
   ): KijiSource = {
     val columnMap = columns
@@ -304,6 +331,7 @@ object KijiInput {
     new KijiSource(
       tableUri,
       timeRange,
+      entityIdSpec,
       None,
       inputColumns = columnMap
     )

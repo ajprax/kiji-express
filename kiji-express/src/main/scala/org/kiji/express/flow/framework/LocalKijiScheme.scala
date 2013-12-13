@@ -45,9 +45,7 @@ import org.slf4j.LoggerFactory
 import org.kiji.annotations.ApiAudience
 import org.kiji.annotations.ApiStability
 import org.kiji.annotations.Inheritance
-import org.kiji.express.flow.ColumnInputSpec
-import org.kiji.express.flow.ColumnOutputSpec
-import org.kiji.express.flow.TimeRange
+import org.kiji.express.flow.{EntityIdSpec, ColumnInputSpec, ColumnOutputSpec, TimeRange}
 import org.kiji.express.flow.util.Resources._
 import org.kiji.mapreduce.framework.KijiConfKeys
 import org.kiji.schema.Kiji
@@ -139,6 +137,7 @@ private[express] case class OutputContext(
 @ApiStability.Experimental
 private[express] class LocalKijiScheme(
     private[express] val timeRange: TimeRange,
+    private[express] val entityIdSpec: EntityIdSpec,
     private[express] val timestampField: Option[Symbol],
     private[express] val icolumns: Map[String, ColumnInputSpec] = Map(),
     private[express] val ocolumns: Map[String, ColumnOutputSpec] = Map())
@@ -146,8 +145,8 @@ private[express] class LocalKijiScheme(
   private val logger: Logger = LoggerFactory.getLogger(classOf[LocalKijiScheme])
 
   /** Set the fields that should be in a tuple when this source is used for reading and writing. */
-  setSourceFields(KijiScheme.buildSourceFields(icolumns.keys ++ ocolumns.keys))
-  setSinkFields(KijiScheme.buildSinkFields(ocolumns, timestampField))
+  setSourceFields(KijiScheme.toField(entityIdSpec.fields ++ icolumns.keys))
+  setSinkFields(KijiScheme.buildSinkFields(entityIdSpec, ocolumns, timestampField))
 
   /**
    * Sets any configuration options that are required for running a local job
@@ -213,6 +212,7 @@ private[express] class LocalKijiScheme(
               icolumns,
               getSourceFields,
               timestampField,
+              entityIdSpec,
               row,
               context.tableUri,
               context.configuration)
@@ -304,7 +304,8 @@ private[express] class LocalKijiScheme(
         output,
         writer,
         layout,
-        configuration)
+        configuration,
+        entityIdSpec)
   }
 
   /**

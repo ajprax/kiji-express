@@ -32,9 +32,7 @@ import com.twitter.scalding.Write
 
 import org.kiji.annotations.ApiAudience
 import org.kiji.annotations.ApiStability
-import org.kiji.express.flow.All
-import org.kiji.express.flow.ColumnOutputSpec
-import org.kiji.express.flow.TimeRange
+import org.kiji.express.flow.{EntityIdSpec, All, ColumnOutputSpec, TimeRange}
 import org.kiji.express.flow.framework.KijiScheme
 
 /**
@@ -74,6 +72,7 @@ class HFileKijiSource private[express] (
     val tableAddress: String,
     val hFileOutput: String,
     val timeRange: TimeRange,
+    val entityIdSpec: EntityIdSpec,
     val timestampField: Option[Symbol],
     val loggingInterval: Long,
     val columns: Map[Symbol, ColumnOutputSpec]
@@ -85,9 +84,15 @@ class HFileKijiSource private[express] (
    * the hadoop runner.
    */
   override val hdfsScheme: KijiScheme.HadoopScheme =
-    new HFileKijiScheme(timeRange, timestampField, loggingInterval, convertKeysToStrings(columns))
-      // This cast is required due to Scheme being defined with invariant type parameters.
-      .asInstanceOf[KijiScheme.HadoopScheme]
+    new HFileKijiScheme(
+        timeRange,
+        entityIdSpec,
+        timestampField,
+        loggingInterval,
+        convertKeysToStrings(columns)
+    // This cast is required due to Scheme being defined with invariant type parameters.
+    ).asInstanceOf[KijiScheme.HadoopScheme]
+
 
   /**
    * Create a connection to the physical data source (also known as a Tap in Cascading)
@@ -153,7 +158,15 @@ class HFileKijiSource private[express] (
 private final class HFileSource(
     override val tableAddress: String,
     override val hFileOutput: String
-) extends HFileKijiSource(tableAddress, hFileOutput, All, None, 0, Map()) {
+) extends HFileKijiSource(
+    tableAddress,
+    hFileOutput,
+    All,
+    EntityIdSpec.NoEntityIdSpec,
+    None,
+    0,
+    Map()
+) {
   /**
    * Creates a Scheme that writes to/reads from a Kiji table for usage with
    * the hadoop runner.

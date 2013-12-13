@@ -35,19 +35,13 @@ import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 
 import org.kiji.express.KijiSuite
-import org.kiji.express.flow.All
-import org.kiji.express.flow.FlowCell
-import org.kiji.express.flow.ColumnInputSpec
-import org.kiji.express.flow.EntityId
-import org.kiji.express.flow.KijiOutput
-import org.kiji.express.flow.KijiSource
-import org.kiji.express.flow.QualifiedColumnOutputSpec
-import org.kiji.express.flow.SchemaSpec
+import org.kiji.express.flow._
 import org.kiji.schema.EntityIdFactory
 import org.kiji.schema.avro.HashSpec
 import org.kiji.schema.avro.HashType
 import org.kiji.schema.layout.KijiTableLayout
 import org.kiji.schema.layout.KijiTableLayouts
+import com.twitter.scalding.TextLine
 
 @RunWith(classOf[JUnitRunner])
 class KijiSchemeSuite extends KijiSuite {
@@ -93,7 +87,8 @@ class KijiSchemeSuite extends KijiSuite {
         writeValue,
         writer,
         tableLayout,
-        configuration)
+        configuration,
+        EntityIdSpec.EntityIdField('entityId))
 
     // Read the tuple back.
     val rowData = reader.get(
@@ -103,6 +98,7 @@ class KijiSchemeSuite extends KijiSuite {
         columnsInput,
         sourceFields,
         None,
+        EntityIdSpec.EntityIdField('entityId),
         rowData,
         uri,
         configuration)

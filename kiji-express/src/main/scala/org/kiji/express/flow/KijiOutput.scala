@@ -46,6 +46,7 @@ import org.kiji.schema.InternalKijiError
 object KijiOutput {
 
   val DEFAULT_COLUMN_OUTPUT_SPECS: Map[Symbol, _ <: ColumnOutputSpec] = Map()
+  val DEFAULT_ENTITY_ID_SPEC: EntityIdSpec = EntityIdSpec.EntityIdField('entityId)
 
   /**
    * A factory method for instantiating [[org.kiji.express.flow.KijiSource]]s used as sinks. This
@@ -60,12 +61,14 @@ object KijiOutput {
    */
   private[express] def apply(
       tableUri: String,
+      entityIdSpec: EntityIdSpec,
       timestampField: Option[Symbol],
       columns: Map[Symbol, _ <: ColumnOutputSpec]
   ): KijiSource = {
     new KijiSource(
         tableAddress = tableUri,
         timeRange = All,
+        entityIdSpec = entityIdSpec,
         timestampField = timestampField,
         outputColumns = columns)
   }
@@ -89,17 +92,20 @@ object KijiOutput {
    * Builder for [[org.kiji.express.flow.KijiSource]]s to be used as outputs.
    *
    * @param constructorTableURI string of the table to which to write.
+   * @param constructorEntityIdSpec specification of fields from which to read the EntityId.
    * @param constructorTimestampField flow Field from which to read the timestamp.
    * @param constructorColumnSpecs mapping from Field to output specification.
    */
   final class Builder private(
       val constructorTableURI: Option[String],
+      val constructorEntityIdSpec: Option[EntityIdSpec],
       val constructorTimestampField: Option[Symbol],
       val constructorColumnSpecs: Option[Map[Symbol, _ <: ColumnOutputSpec]]
   ) {
     private[this] val monitor = new AnyRef
 
     private var mTableURI: Option[String] = constructorTableURI
+    private var mEntityIdSpec: Option[EntityIdSpec] = constructorEntityIdSpec
     private var mTimestampField: Option[Symbol] = constructorTimestampField
     private var mColumnSpecs: Option[Map[Symbol, _ <: ColumnOutputSpec]] = constructorColumnSpecs
 
@@ -129,7 +135,7 @@ object KijiOutput {
      * @return this builder.
      */
     def withTimestampField(timestampField: Symbol): Builder = monitor.synchronized {
-      require(None == mTimestampField, "Timestamp Field already set to: " + mTimestampField)
+      require(None == mTimestampField, "Timestamp Field already set to: " + mTimestampField.get)
       mTimestampField = Some(timestampField)
       this
     }
@@ -140,6 +146,14 @@ object KijiOutput {
      * @return the Field whose value will be used as a timestamp when writing.
      */
     def timestampField: Option[Symbol] = mTimestampField
+
+    def withEntityIdSpec(entityIdSpec: EntityIdSpec): Builder = monitor.synchronized {
+      require(None == mEntityIdSpec, "EntityIdSpec already set to: " + mEntityIdSpec.get)
+      mEntityIdSpec = Some(entityIdSpec)
+      this
+    }
+
+    def entityIdSpec: Option[EntityIdSpec] = mEntityIdSpec
 
     /**
      * Configure the KijiSource to write values of the given Fields to the corresponding columns.
@@ -318,6 +332,7 @@ object KijiOutput {
     def build: KijiSource = monitor.synchronized {
       KijiOutput(
         tableURI.getOrElse(throw new IllegalArgumentException("Table URI must be specified.")),
+        entityIdSpec.getOrElse(DEFAULT_ENTITY_ID_SPEC),
         timestampField,
         columnSpecs.getOrElse(DEFAULT_COLUMN_OUTPUT_SPECS)
       )
@@ -336,7 +351,7 @@ object KijiOutput {
      *
      * @return a new empty KijiOutput.Builder.
      */
-    private[express] def apply(): Builder = new Builder(None, None, None)
+    private[express] def apply(): Builder = new Builder(None, None, None, None)
 
     /**
      * Create a new KijiOutputBuilder as a copy of the given Builder.
@@ -345,6 +360,6 @@ object KijiOutput {
      * @return a new KijiOutputBuilder as a copy of the given Builder.
      */
     private[express] def apply(other: Builder): Builder =
-        new Builder(other.tableURI, other.timestampField, other.columnSpecs)
+        new Builder(other.tableURI, other.entityIdSpec, other.timestampField, other.columnSpecs)
   }
 }

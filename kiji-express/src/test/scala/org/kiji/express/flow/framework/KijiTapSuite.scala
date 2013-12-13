@@ -25,9 +25,7 @@ import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 
 import org.kiji.express.KijiSuite
-import org.kiji.express.flow.All
-import org.kiji.express.flow.ColumnInputSpec
-import org.kiji.express.flow.InvalidKijiTapException
+import org.kiji.express.flow.{EntityIdSpec, All, ColumnInputSpec, InvalidKijiTapException}
 import org.kiji.schema.KijiURI
 import org.kiji.schema.layout.KijiTableLayout
 
@@ -44,6 +42,7 @@ class KijiTapSuite extends KijiSuite {
     val testScheme: KijiScheme = new KijiScheme(
         tableUri = kijiURI,
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map(
             "dummy_field1" -> ColumnInputSpec("searches"),
@@ -61,6 +60,7 @@ class KijiTapSuite extends KijiSuite {
     val testScheme: KijiScheme = new KijiScheme(
         tableUri = kijiURI,
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map(
             "dummy_field1" -> ColumnInputSpec("searches"),
@@ -84,6 +84,7 @@ class KijiTapSuite extends KijiSuite {
     val testScheme: KijiScheme = new KijiScheme(
         tableUri = kijiURI,
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map(
             "dummy_field1" -> ColumnInputSpec("searches"),
@@ -107,6 +108,7 @@ class KijiTapSuite extends KijiSuite {
     val testScheme: KijiScheme = new KijiScheme(
         tableUri = kijiURI,
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map(
             "dummy_field1" -> ColumnInputSpec("searches"),
@@ -128,6 +130,7 @@ class KijiTapSuite extends KijiSuite {
     val testScheme: KijiScheme = new KijiScheme(
         tableUri = kijiURI,
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map(
             "dummy_field1" -> ColumnInputSpec("nonexistent1"),

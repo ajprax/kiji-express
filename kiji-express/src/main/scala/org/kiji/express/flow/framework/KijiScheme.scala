@@ -43,18 +43,7 @@ import org.slf4j.LoggerFactory
 
 import org.kiji.annotations.ApiAudience
 import org.kiji.annotations.ApiStability
-import org.kiji.express.flow.ColumnFamilyInputSpec
-import org.kiji.express.flow.ColumnFamilyOutputSpec
-import org.kiji.express.flow.ColumnInputSpec
-import org.kiji.express.flow.ColumnOutputSpec
-import org.kiji.express.flow.EntityId
-import org.kiji.express.flow.FlowCell
-import org.kiji.express.flow.PagingSpec
-import org.kiji.express.flow.QualifiedColumnInputSpec
-import org.kiji.express.flow.QualifiedColumnOutputSpec
-import org.kiji.express.flow.SchemaSpec
-import org.kiji.express.flow.TimeRange
-import org.kiji.express.flow.TransientStream
+import org.kiji.express.flow._
 import org.kiji.express.flow.framework.serialization.KijiLocker
 import org.kiji.express.flow.util.AvroUtil
 import org.kiji.express.flow.util.Resources.withKijiTable
@@ -76,6 +65,8 @@ import org.kiji.schema.avro.AvroSchema
 import org.kiji.schema.avro.SchemaType
 import org.kiji.schema.filter.KijiColumnFilter
 import org.kiji.schema.layout.KijiTableLayout
+import scala.Some
+import org.kiji.express.flow.EntityIdSpec.{EntityIdComponents, EntityIdField, NoEntityIdSpec}
 
 /**
  * A Kiji-specific implementation of a Cascading `Scheme`, which defines how to read and write the
@@ -105,6 +96,7 @@ import org.kiji.schema.layout.KijiTableLayout
 class KijiScheme(
     tableUri: KijiURI,
     private[express] val timeRange: TimeRange,
+    private[express] val entityIdSpec: EntityIdSpec,
     private[express] val timestampField: Option[Symbol],
     @transient private[express] val inputColumns: Map[String, ColumnInputSpec] = Map(),
     @transient private[express] val outputColumns: Map[String, ColumnOutputSpec] = Map()
@@ -135,8 +127,8 @@ class KijiScheme(
 
   // Including output column keys here because we might need to read back outputs during test
   // TODO (EXP-250): Ideally we should include outputColumns.keys here only during tests.
-  setSourceFields(buildSourceFields(_inputColumns.get.keys ++ _outputColumns.get.keys))
-  setSinkFields(buildSinkFields(_outputColumns.get, timestampField))
+  setSourceFields(toField(entityIdSpec.fields ++ _inputColumns.get.keys))
+  setSinkFields(buildSinkFields(entityIdSpec, _outputColumns.get, timestampField))
 
   /**
    * Sets any configuration options that are required for running a MapReduce job
@@ -219,6 +211,7 @@ class KijiScheme(
           _inputColumns.get,
           getSourceFields,
           timestampField,
+          entityIdSpec,
           row,
           tableUri,
           flow.getConfigCopy
@@ -320,7 +313,8 @@ class KijiScheme(
         output,
         writer,
         layout,
-        flow.getConfigCopy)
+        flow.getConfigCopy,
+        entityIdSpec)
   }
 
   /**
@@ -403,6 +397,7 @@ object KijiScheme {
       columns: Map[String, ColumnInputSpec],
       fields: Fields,
       timestampField: Option[Symbol],
+      entityIdSpec: EntityIdSpec,
       row: KijiRowData,
       tableUri: KijiURI,
       configuration: Configuration
@@ -411,7 +406,14 @@ object KijiScheme {
 
     // Add the row's EntityId to the tuple.
     val entityId: EntityId = EntityId.fromJavaEntityId(row.getEntityId)
-    result.add(entityId)
+    entityIdSpec match {
+      case EntityIdField(field) => result.add(entityId)
+      case EntityIdComponents(components) => components.map {
+        case (index, _) => result.add(entityId(index))
+      }
+      case NoEntityIdSpec =>
+    }
+//    result.add(entityId)
 
     def rowToTupleColumnFamily(cf: ColumnFamilyInputSpec) {
       if (row.containsColumn(cf.family)) {
@@ -481,7 +483,7 @@ object KijiScheme {
     fields
         .iterator()
         .asScala
-        .filter { field => field.toString != entityIdField }
+        .filter { field => !entityIdSpec.fields.toIterator.contains(field.toString) }
         .filter { field => field.toString != timestampField.getOrElse("") }
         .map { field => columns(field.toString) }
         // Build the tuple, by adding each requested value into result.
@@ -517,13 +519,29 @@ object KijiScheme {
       output: TupleEntry,
       writer: KijiTableWriter,
       layout: KijiTableLayout,
-      configuration: Configuration
+      configuration: Configuration,
+      entityIdSpec: EntityIdSpec
   ) {
     // Get the entityId.
-    val entityId = output
-        .getObject(entityIdField)
-        .asInstanceOf[EntityId]
-        .toJavaEntityId(EntityIdFactory.getFactory(layout))
+    val entityId = entityIdSpec match {
+      case EntityIdField(field) => {
+        output
+            .getObject(field.name)
+            .asInstanceOf[EntityId]
+            .toJavaEntityId(EntityIdFactory.getFactory(layout))
+      }
+      case EntityIdComponents(components) => {
+        val eidFactory = EntityIdFactory.getFactory(layout)
+        EntityId(components
+            .map { case(index, field) => (index, output.getObject(field.name)) }
+            .toSeq
+            .sortBy { case(index, component) => index }
+            .map { case(_, component) => component }: _*
+        ).toJavaEntityId(eidFactory)
+      }
+      case NoEntityIdSpec => throw new IllegalArgumentException("NoEntityIdSpec may not be used in "
+          + "a KijiSource used for output.")
+    }
 
     // Get a timestamp to write the values to, if it was specified by the user.
     val timestamp: Long = timestampField match {
@@ -653,7 +671,7 @@ object KijiScheme {
    * @param fieldNames is a list of field names.
    * @return a Fields object containing the names.
    */
-  private def toField(fieldNames: Iterable[Comparable[_]]): Fields = {
+  private[express] def toField(fieldNames: Iterable[Comparable[_]]): Fields = {
     new Fields(fieldNames.toArray:_*)
   }
 
@@ -682,10 +700,11 @@ object KijiScheme {
    * @return a collection of fields created from the parameters.
    */
   private[express] def buildSinkFields(
+      entityIdSpec: EntityIdSpec,
       columns: Map[String, ColumnOutputSpec],
       timestampField: Option[Symbol]
   ): Fields = {
-    toField(Set(entityIdField)
+    toField(entityIdSpec.fields
         ++ columns.keys
         ++ extractQualifierSelectors(columns)
         ++ timestampField.map { _.name } )

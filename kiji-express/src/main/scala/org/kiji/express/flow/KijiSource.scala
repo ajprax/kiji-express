@@ -21,6 +21,7 @@ package org.kiji.express.flow
 
 import scala.collection.JavaConverters.asScalaIteratorConverter
 import scala.collection.JavaConverters.mapAsScalaMapConverter
+import scala.collection.JavaConverters.seqAsJavaListConverter
 import scala.collection.mutable.Buffer
 
 import java.io.OutputStream
@@ -67,6 +68,7 @@ import org.kiji.schema.KijiRowScanner
 import org.kiji.schema.KijiTable
 import org.kiji.schema.KijiTableWriter
 import org.kiji.schema.KijiURI
+import org.kiji.express.flow.EntityIdSpec.{NoEntityIdSpec, EntityIdField, EntityIdComponents}
 
 /**
  * A read or write view of a Kiji table.
@@ -103,6 +105,7 @@ import org.kiji.schema.KijiURI
 final class KijiSource private[express] (
     val tableAddress: String,
     val timeRange: TimeRange,
+    val entityIdSpec: EntityIdSpec,
     val timestampField: Option[Symbol],
     val inputColumns: Map[Symbol, ColumnInputSpec] = Map(),
     val outputColumns: Map[Symbol, ColumnOutputSpec] = Map()
@@ -119,6 +122,7 @@ final class KijiSource private[express] (
       new KijiScheme(
           tableUri,
           timeRange,
+          entityIdSpec,
           timestampField,
           convertKeysToStrings(inputColumns),
           convertKeysToStrings(outputColumns)
@@ -128,6 +132,7 @@ final class KijiSource private[express] (
   private val localKijiScheme: LocalKijiScheme =
       new LocalKijiScheme(
           timeRange,
+          entityIdSpec,
           timestampField,
           convertKeysToStrings(inputColumns),
           convertKeysToStrings(outputColumns)
@@ -181,13 +186,19 @@ final class KijiSource private[express] (
         readOrWrite match {
           case Read => {
             val scheme = kijiScheme
-            populateTestTable(tableUri, buffers(this), scheme.getSourceFields, conf)
+            populateTestTable(
+                tableUri,
+                buffers(this),
+                scheme.getSourceFields,
+                conf,
+                entityIdSpec)
 
             new KijiTap(tableUri, scheme).asInstanceOf[Tap[_, _, _]]
           }
           case Write => {
             val scheme = new TestKijiScheme(
                 tableUri,
+                entityIdSpec,
                 timestampField,
                 getInputColumnsForTesting,
                 convertKeysToStrings(outputColumns))
@@ -205,7 +216,8 @@ final class KijiSource private[express] (
                 tableUri,
                 buffers(this),
                 scheme.getSourceFields,
-                HBaseConfiguration.create())
+                HBaseConfiguration.create(),
+                entityIdSpec)
 
             new LocalKijiTap(tableUri, scheme).asInstanceOf[Tap[_, _, _]]
           }
@@ -215,6 +227,7 @@ final class KijiSource private[express] (
             val scheme = new TestLocalKijiScheme(
                 buffers(this),
                 timeRange,
+                entityIdSpec,
                 timestampField,
                 getInputColumnsForTesting,
                 convertKeysToStrings(outputColumns))
@@ -236,6 +249,7 @@ final class KijiSource private[express] (
        .toStringHelper(this)
        .add("tableAddress", tableAddress)
        .add("timeRange", timeRange)
+       .add("entityIdSpec", entityIdSpec)
        .add("timestampField", timestampField)
        .add("inputColumns", inputColumns)
        .add("outputColumns", outputColumns)
@@ -249,7 +263,8 @@ final class KijiSource private[express] (
         Objects.equal(inputColumns, source.inputColumns) &&
         Objects.equal(outputColumns, source.outputColumns) &&
         Objects.equal(timestampField, source.timestampField) &&
-        Objects.equal(timeRange, source.timeRange)
+        Objects.equal(timeRange, source.timeRange) &&
+        Objects.equal(entityIdSpec, source.entityIdSpec)
       }
       case _ => false
     }
@@ -286,6 +301,7 @@ private[express] object KijiSource {
   private[express] def makeTap(
       tableAddress: String,
       timeRange: TimeRange,
+      entityIdSpec: EntityIdSpec,
       timestampField: String,
       inputColumns: java.util.Map[String, ColumnInputSpec],
       outputColumns: java.util.Map[String, ColumnOutputSpec]
@@ -293,6 +309,7 @@ private[express] object KijiSource {
     val kijiSource = new KijiSource(
         tableAddress,
         timeRange,
+        entityIdSpec,
         Option(Symbol(timestampField)),
         inputColumns.asScala.toMap.map{ case (symbolName, column) => (Symbol(symbolName), column) },
         outputColumns.asScala.toMap.map{ case (symbolName, column) => (Symbol(symbolName), column) }
@@ -323,7 +340,8 @@ private[express] object KijiSource {
       tableUri: KijiURI,
       rows: Buffer[Tuple],
       fields: Fields,
-      configuration: Configuration) {
+      configuration: Configuration,
+      entityIdSpec: EntityIdSpec) {
     doAndRelease(Kiji.Factory.open(tableUri)) { kiji: Kiji =>
       // Layout to get the default reader schemas from.
       val layout = withKijiTable(tableUri, configuration) { table: KijiTable =>
@@ -336,13 +354,32 @@ private[express] object KijiSource {
       withKijiTableWriter(tableUri, configuration) { writer: KijiTableWriter =>
         rows.foreach { row: Tuple =>
           val tupleEntry = new TupleEntry(fields, row)
-          val iterator = fields.iterator()
 
-          // Get the entity id field.
-          val entityIdField = iterator.next().toString
-          val entityId = tupleEntry
-            .getObject(entityIdField)
-            .asInstanceOf[EntityId]
+          // Extract the entityId from the fields, and remove any fields which were holding the EID.
+          // This should leave only data fields in the iterator.
+          val (iterator: Iterator[AnyRef], entityId: EntityId) = entityIdSpec match {
+            case EntityIdComponents(components) => {
+              val innerIterator = fields.iterator()
+              val innerEID = EntityId(components
+                  .map { case(index, field) => (index, tupleEntry.getObject(field.name)) }
+                  .toSeq
+                  .sortBy { case(index, component) => index }
+                  .map { case(_, component) => component }: _*
+              )
+              (innerIterator.asScala.filter {
+                !components.values.toIterator.map { (sym: Symbol) => sym.name }.contains(_)
+              }, innerEID)
+            }
+            case EntityIdField(field) => {
+              val innerIterator = fields.iterator()
+              val innerEID = tupleEntry.getObject(field.name).asInstanceOf[EntityId]
+              (innerIterator.asScala.filter { field.name != _ }, innerEID)
+            }
+            case NoEntityIdSpec => throw new IllegalArgumentException(("Cannot populate a test "
+                + " table without an entity id field. found entityId spec: %s To test a job which "
+                + "uses a NoEntityIdSpec in its input, populate the table ahead of time and specify"
+                + " an empty Buffer to the normal Buffer input.").format(entityIdSpec))
+          }
 
           // Iterate through fields in the tuple, adding each one.
           while (iterator.hasNext) {
@@ -409,11 +446,13 @@ private[express] object KijiSource {
   private class TestLocalKijiScheme(
       val buffer: Buffer[Tuple],
       timeRange: TimeRange,
+      entityIdSpec: EntityIdSpec,
       timestampField: Option[Symbol],
       inputColumns: Map[String, ColumnInputSpec],
       outputColumns: Map[String, ColumnOutputSpec])
       extends LocalKijiScheme(
           timeRange,
+          entityIdSpec,
           timestampField,
           inputColumnSpecifyAllData(inputColumns),
           outputColumns) {
@@ -443,6 +482,7 @@ private[express] object KijiSource {
                       inputColumns,
                       getSourceFields,
                       timestampField,
+                      entityIdSpec,
                       row,
                       table.getURI,
                       conf
@@ -506,6 +546,8 @@ private[express] object KijiSource {
    * A KijiScheme that loads rows in a table into the provided buffer. This class should only be
    * used during tests.
    *
+   * @param tableUri of the Kiji table to which values would be written.
+   * @param entityIdSpec specification of Fields from which to build the EntityId.
    * @param timestampField is the name of a tuple field that will contain cell timestamp when the
    *     source is used for writing. Specify `None` to write all cells at the current time.
    * @param inputColumns Scalding field name to column input spec mapping.
@@ -513,12 +555,14 @@ private[express] object KijiSource {
    */
   private class TestKijiScheme(
       tableUri: KijiURI,
+      entityIdSpec: EntityIdSpec,
       timestampField: Option[Symbol],
       inputColumns: Map[String, ColumnInputSpec],
       outputColumns: Map[String, ColumnOutputSpec])
       extends KijiScheme(
           tableUri,
           All,
+          entityIdSpec,
           timestampField,
           mergeColumnMapping(inputColumns, outputColumns),
           outputColumns) {

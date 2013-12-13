@@ -24,21 +24,16 @@ import java.util.UUID
 import scala.collection.mutable.Buffer
 
 import cascading.tuple.Fields
-import com.twitter.scalding.Args
-import com.twitter.scalding.JobTest
-import com.twitter.scalding.TextLine
-import com.twitter.scalding.Tsv
+import com.twitter.scalding._
 import org.apache.avro.generic.GenericRecord
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 
 import org.kiji.express.KijiSuite
 import org.kiji.express.avro.SimpleRecord
-import org.kiji.express.flow.SchemaSpec.Specific
+import org.kiji.express.flow.util.Resources.doAndClose
 import org.kiji.express.flow.util.Resources.doAndRelease
-import org.kiji.schema.Kiji
-import org.kiji.schema.KijiColumnName
-import org.kiji.schema.KijiTable
+import org.kiji.schema._
 import org.kiji.schema.avro.AvroValidationPolicy
 import org.kiji.schema.avro.HashSpec
 import org.kiji.schema.avro.HashType
@@ -47,6 +42,12 @@ import org.kiji.schema.avro.TestRecord
 import org.kiji.schema.layout.KijiTableLayout
 import org.kiji.schema.layout.KijiTableLayouts
 import org.kiji.schema.layout.TableLayoutBuilder
+import scala.Tuple1
+import com.twitter.scalding.TextLine
+import org.kiji.express.flow.SchemaSpec.Specific
+import com.twitter.scalding.Tsv
+import org.kiji.schema.{EntityId => JEntityId}
+import org.apache.avro.util.Utf8
 
 @RunWith(classOf[JUnitRunner])
 class KijiSourceSuite
@@ -58,6 +59,8 @@ class KijiSourceSuite
 
   /** Table layout using Avro schemas to use for tests. The row keys are formatted. */
   val avroLayout: KijiTableLayout = layout("layout/avro-types.json")
+
+  val formattedLayout: KijiTableLayout = layout(KijiTableLayouts.FORMATTED_RKF)
 
   /** Input tuples to use for word count tests. */
   def wordCountInput(uri: String): List[(EntityId, Seq[FlowCell[String]])] = {
@@ -605,6 +608,7 @@ class KijiSourceSuite
     val ksource = new KijiSource(
         tableAddress = uri,
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map('records -> ColumnInputSpec(
           "family:column3", schemaSpec = Specific(classOf[HashSpec]))),
@@ -790,6 +794,274 @@ class KijiSourceSuite
 
     // Run the test in hadoop mode.
     jobTest.runHadoop.finish
+  }
+
+  test("A job with a custom EntityIdSpec for input can be run in local and hadoop modes.") {
+    // URI of the Kiji table to use.
+    val uri: String = doAndRelease(makeTestKijiTable(avroLayout)) { table: KijiTable =>
+      table.getURI().toString()
+    }
+
+    // Create input from Kiji table.
+    val input: List[(EntityId, Seq[FlowCell[String]])] = List(
+      ( EntityId("0row"), mapSlice("animals", ("0column", 1L, "0 dogs")) ),
+      ( EntityId("1row"), mapSlice("animals", ("0column", 1L, "1 cat")) ),
+      ( EntityId("2row"), mapSlice("animals", ("0column", 1L, "2 fish")) ))
+
+    def validateTest(outputBuffer: Buffer[(String, String)]): Unit = {
+      assert(outputBuffer.size === 1)
+      val (eid, cells) = outputBuffer.head
+      assert(eid.contains("0row"))
+      assert(cells.contains("0 dogs"))
+    }
+
+    val jobTest = JobTest(new EntityIdFilterJob(_))
+        .arg("input", uri)
+        .arg("output", "outputFile")
+        .source(KijiInput.builder
+            .withTableURI(uri)
+            .withTimeRange(All)
+            .withEntityIdSpec(EntityIdSpec.EntityIdField('testEID))
+            .withColumns("animals:0column" -> 'col0)
+        .build, input)
+        .sink(Tsv("outputFile"))(validateTest)
+
+    jobTest.run.finish
+    jobTest.runHadoop.finish
+  }
+
+  test("A job with no entityId field can be run in local and hadoop modes.") {
+    // URI of the Kiji table to use.
+    val uri: String = doAndRelease(makeTestKijiTable(avroLayout)) { table: KijiTable =>
+      doAndClose(table.openTableWriter()) { writer: KijiTableWriter =>
+        writer.put(table.getEntityId("0row"), "animals", "0column", 1L, "0 dogs")
+        writer.put(table.getEntityId("1row"), "animals", "0column", 1L, "1 cat")
+        writer.put(table.getEntityId("2row"), "animals", "0column", 1L, "2 fish")
+      }
+      table.getURI().toString()
+    }
+
+    def validateTest(outputBuffer: Buffer[(String)]): Unit = {
+      assert(outputBuffer.size === 3)
+      assert(!outputBuffer.toString.contains("EntityId"))
+    }
+
+    val jobTest = JobTest(new NoEntityIdJob(_))
+        .arg("input", uri)
+        .arg("output", "outputFile")
+        .source(KijiInput.builder
+            .withTableURI(uri)
+            .withEntityIdSpec(EntityIdSpec.NoEntityIdSpec)
+            .withColumns("animals:0column" -> 'col0)
+            .build, List())
+        .sink(Tsv("outputFile"))(validateTest)
+
+    jobTest.run.finish
+    jobTest.runHadoop.finish
+  }
+
+  test("A job with EntityIdComponents with tuple inputs can be run in local and hadoop modes.") {
+    // URI of the Kiji table to use.
+    val uri: String = doAndRelease(makeTestKijiTable(formattedLayout)) { table: KijiTable =>
+      table.getURI().toString()
+    }
+
+    val input: List[(String, String, String, Int, Long, Seq[FlowCell[String]])] = List(
+      ( "dummy", "str1", "str2", 0, 0L, mapSlice("family", ("column", 1L, "0 dogs")) ),
+      ( "dummy", "str1", "str2", 0, 1L, mapSlice("family", ("column", 1L, "1 cat")) ),
+      ( "dummy", "str1", "str2", 0, 2L, mapSlice("family", ("column", 1L, "2 fish")) ))
+
+    def validateTest(
+        outputBuffer: Buffer[(String, String, String, Int, Long, String)]
+    ): Unit = {
+      assert(outputBuffer.size === 1)
+      val (_, _, _, _, aLong, cells) = outputBuffer.head
+      assert(aLong === 1)
+      assert(cells.contains("1 cat"))
+    }
+
+    val jobTest = JobTest(new EntityIdComponentsJob(_))
+        .arg("input", uri)
+        .arg("output", "outputFile")
+        .source(KijiInput.builder
+            .withTableURI(uri)
+            .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+                (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+            ))
+            .withColumns("family:column" -> 'col)
+            .build, input)
+        .sink(Tsv("outputFile"))(validateTest)
+
+    jobTest.run.finish
+    jobTest.runHadoop.finish
+  }
+
+  test("A job with EntityIdComponents with table input can be run in local and hadoop modes.") {
+    // URI of the Kiji table to use.
+    val uri: String = doAndRelease(makeTestKijiTable(formattedLayout)) { table: KijiTable =>
+      val eidFactory: EntityIdFactory = EntityIdFactory.getFactory(table.getLayout)
+
+      val eid1: JEntityId = EntityId("dummy", "str1", "str2", 0, 0L).toJavaEntityId(eidFactory)
+      val eid2: JEntityId = EntityId("dummy", "str1", "str2", 0, 1L).toJavaEntityId(eidFactory)
+      val eid3: JEntityId = EntityId("dummy", "str1", "str2", 0, 2L).toJavaEntityId(eidFactory)
+
+      doAndClose(table.openTableWriter()) { writer: KijiTableWriter =>
+        writer.put(eid1, "family", "column", 1L, "0 dogs")
+        writer.put(eid2, "family", "column", 1L, "1 cat")
+        writer.put(eid3, "family", "column", 1L, "2 fish")
+      }
+      table.getURI().toString()
+    }
+
+    def validateTest(
+          outputBuffer: Buffer[(String, String, String, Int, Long, String)]
+    ): Unit = {
+      assert(outputBuffer.size === 1)
+      val (_, _, _, _, aLong, cells) = outputBuffer.head
+      assert(aLong === 1)
+      assert(cells.contains("1 cat"))
+    }
+
+    val jobTest = JobTest(new EntityIdComponentsJob(_))
+        .arg("input", uri)
+        .arg("output", "outputFile")
+        .source(KijiInput.builder
+        .withTableURI(uri)
+        .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+      (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+    ))
+        .withColumns("family:column" -> 'col)
+        .build, List())
+        .sink(Tsv("outputFile"))(validateTest)
+
+    jobTest.run.finish
+    jobTest.runHadoop.finish
+  }
+
+  test("A job with a custom EntityIdSpec writes to a table in local and hadoop modes.") {
+    // URI of the Kiji table to use.
+    val uri: String = doAndRelease(makeTestKijiTable(avroLayout)) { table: KijiTable =>
+      table.getURI().toString()
+    }
+
+    // Create input from Kiji table.
+    val input: List[(EntityId, Seq[FlowCell[String]])] = List(
+      ( EntityId("0row"), mapSlice("animals", ("0column", 1L, "0 dogs")) ),
+      ( EntityId("1row"), mapSlice("animals", ("0column", 1L, "1 cat")) ),
+      ( EntityId("2row"), mapSlice("animals", ("0column", 1L, "2 fish")) ))
+
+    def validateTest(
+        outputBuffer: Buffer[(EntityId, Seq[FlowCell[Utf8]])]
+    ): Unit = {
+      val (eid, _) = outputBuffer.head
+      assert(eid === EntityId("newEID"))
+    }
+
+    val jobTest = JobTest(new SimpleEntityIdWriteJob(_))
+        .arg("input", uri)
+        .source(KijiInput.builder
+            .withTableURI(uri)
+            .withEntityIdSpec(EntityIdSpec.EntityIdField('testEID))
+            .withColumns("animals:0column" -> 'col0)
+            .build, input)
+        .sink(KijiOutput.builder
+            .withTableURI(uri)
+            .withEntityIdSpec(EntityIdSpec.EntityIdField('testEID))
+            .withColumns('col0 -> "animals:0column")
+            .build
+        )(validateTest)
+
+    jobTest.run.finish
+    jobTest.runHadoop.finish
+  }
+
+  test("A job with EntityIdComponents writes to a table in local and hadoop modes.") {
+    // URI of the Kiji table to use.
+    val uri: String = doAndRelease(makeTestKijiTable(formattedLayout)) { table: KijiTable =>
+      table.getURI().toString()
+    }
+
+    // Create input from Kiji table.
+    val input: List[(String, String, String, Int, Long, Seq[FlowCell[String]])] = List(
+      ( "dummy", "str1", "str2", 0, 0L, slice("family:column", (1L, "0 dogs")) ),
+      ( "dummy", "str1", "str2", 0, 1L, slice("family:column", (1L, "1 cat")) ),
+      ( "dummy", "str1", "str2", 0, 2L, slice("family:column", (1L, "2 fish")) ))
+
+    def validateTest(
+        outputBuffer: Buffer[(String, String, String, Int, Long, String)]
+    ): Unit = {
+      val outputLongs = outputBuffer.map { case(_, _, _, _, aLong, _) => aLong }.toSet
+      assert(outputLongs.contains(0))
+      assert(outputLongs.contains(1))
+      assert(outputLongs.contains(2))
+      assert(outputLongs.contains(4))
+    }
+
+    val jobTest = JobTest(new ComponentsEntityIdWriteJob(_))
+        .arg("input", uri)
+        .source(KijiInput.builder
+        .withTableURI(uri)
+        .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+            (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+        ))
+        .withColumns("family:column" -> 'col0)
+        .build, input)
+        .sink(KijiOutput.builder
+        .withTableURI(uri)
+        .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+            (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+        ))
+        .withColumns('col0 -> "family:column")
+        .build
+        )(validateTest)
+
+    jobTest.run.finish
+    jobTest.runHadoop.finish
+  }
+
+  /**
+   * A job that writes with a custom entityId Field.
+   *
+   * @param args to the job. These get parsed in from the command line by Scalding.  Within your own
+   *     KijiJob, `args("input")` will evaluate to "SomeFile.txt" if your command line contained the
+   *     argument `--input SomeFile.txt`
+   */
+  class SimpleEntityIdWriteJob(args: Args) extends KijiJob(args) {
+    KijiInput.builder
+        .withTableURI(args("input"))
+        .withEntityIdSpec(EntityIdSpec.EntityIdField('testEID))
+        .withColumns("animals:0column" -> 'col0)
+        .build
+        .map('testEID -> 'testEID) {
+          (eid: EntityId) => EntityId("newEID")
+        }
+        .write(KijiOutput.builder
+            .withTableURI(args("input"))
+            .withEntityIdSpec(EntityIdSpec.EntityIdField('testEID))
+            .withColumns('col0 -> "animals:0column")
+            .build
+        )
+  }
+
+  class ComponentsEntityIdWriteJob(args: Args) extends KijiJob(args) {
+    val input = KijiInput.builder
+        .withTableURI(args("input"))
+        .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+            (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+        ))
+        .withColumns("family:column" -> 'col0)
+        .build
+    val output = KijiOutput.builder
+        .withTableURI(args("input"))
+        .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+            (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+        ))
+        .withColumns('col0 -> "family:column")
+        .build
+
+    input
+        .map('aLong -> 'aLong) { (aLong: Long) => aLong * 2 }
+        .write(output)
   }
 }
 
@@ -987,6 +1259,7 @@ object KijiSourceSuite {
     val ksource = new KijiSource(
         tableAddress = args("input"),
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map('records -> ColumnInputSpec(
             "family:column3", schemaSpec = Specific(classOf[HashSpec]))),
@@ -1090,6 +1363,58 @@ object KijiSourceSuite {
           animals.head.datum.toString.split(" ")(0) + "row" }
         .discard('entityId)
         .joinWithSmaller('terms -> 'line, sidePipe)
+        .write(Tsv(args("output")))
+  }
+
+  /**
+   * A job that uses a custom entityId Field.
+   *
+   * @param args to the job. These get parsed in from the command line by Scalding.  Within your own
+   *     KijiJob, `args("input")` will evaluate to "SomeFile.txt" if your command line contained the
+   *     argument `--input SomeFile.txt`
+   */
+  class EntityIdFilterJob(args: Args) extends KijiJob(args) {
+    KijiInput.builder
+        .withTableURI(args("input"))
+        .withEntityIdSpec(EntityIdSpec.EntityIdField('testEID))
+        .withColumns("animals:0column" -> 'col0)
+        .build
+        .filter('testEID) { eid: EntityId => eid(0) == "0row" }
+        .write(Tsv(args("output")))
+  }
+
+  /**
+   * A job which does not use an EntityId Field.
+   *
+   * @param args to the job. These get parsed in from the command line by Scalding.  Within your own
+   *     KijiJob, `args("input")` will evaluate to "SomeFile.txt" if your command line contained the
+   *     argument `--input SomeFile.txt`
+   */
+  class NoEntityIdJob(args: Args) extends KijiJob(args) {
+    KijiInput.builder
+        .withTableURI(args("input"))
+        .withEntityIdSpec(EntityIdSpec.NoEntityIdSpec)
+        .withColumns("animals:0column" -> 'col0)
+        .build
+        .write(Tsv(args("output")))
+  }
+
+  /**
+   * A job which does not use an EntityId Field.
+   *
+   * @param args to the job. These get parsed in from the command line by Scalding.  Within your own
+   *     KijiJob, `args("input")` will evaluate to "SomeFile.txt" if your command line contained the
+   *     argument `--input SomeFile.txt`
+   */
+  class EntityIdComponentsJob(args: Args) extends KijiJob(args) {
+    KijiInput.builder
+        .withTableURI(args("input"))
+        .withEntityIdSpec(EntityIdSpec.EntityIdComponents(
+      (0, 'dummy), (1, 'str1), (2, 'str2), (3, 'anInt), (4, 'aLong)
+    ))
+        .withColumns("family:column" -> 'col)
+        .build
+        .filter('aLong) { (aLong: Long) => aLong % 2 != 0 }
         .write(Tsv(args("output")))
   }
 }

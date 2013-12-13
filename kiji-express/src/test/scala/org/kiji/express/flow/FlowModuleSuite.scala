@@ -120,6 +120,7 @@ class FlowModuleSuite extends FunSuite {
     val expectedScheme = new KijiScheme(
         tableUri = KijiURI.newBuilder(tableURI).build(),
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         inputColumns = Map("word" -> QualifiedColumnInputSpec("info", "word")))
 
@@ -135,6 +136,7 @@ class FlowModuleSuite extends FunSuite {
     val expectedScheme = new KijiScheme(
         KijiURI.newBuilder(tableURI).build(),
         Between(0L, 40L),
+        EntityIdSpec.EntityIdField('entityId),
         None,
         Map("word" -> QualifiedColumnInputSpec("info", "word")))
 
@@ -150,6 +152,7 @@ class FlowModuleSuite extends FunSuite {
       new KijiScheme(
           KijiURI.newBuilder(tableURI).build(),
           All,
+          EntityIdSpec.EntityIdField('entityId),
           None,
           Map(
               "word" -> QualifiedColumnInputSpec("info", "word"),
@@ -205,6 +208,7 @@ class FlowModuleSuite extends FunSuite {
     val expectedScheme: KijiScheme = new KijiScheme(
         tableUri = KijiURI.newBuilder(tableURI).build(),
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = None,
         outputColumns = Map("words" -> QualifiedColumnOutputSpec.builder
             .withColumn("info", "words")
@@ -221,6 +225,7 @@ class FlowModuleSuite extends FunSuite {
     val expectedScheme: KijiScheme = new KijiScheme(
         tableUri = KijiURI.newBuilder(tableURI).build(),
         timeRange = All,
+        entityIdSpec = EntityIdSpec.EntityIdField('entityId),
         timestampField = Some('time),
         outputColumns = Map("words" -> QualifiedColumnOutputSpec.builder
             .withColumn("info", "words")
