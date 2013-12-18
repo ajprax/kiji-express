@@ -2,6 +2,7 @@
                              Kiji Express Release Notes
 
 Version 0.15.0
+  * EXP-355.  Added Express key-value stores.
   * EXP-353. Renamed utility classes to be suffixed with Util.
 
 Version 0.14.0
