@@ -60,20 +60,15 @@ import org.kiji.express.flow.framework.serialization.KijiKryoExternalizer
 import org.kiji.express.flow.util.AvroUtil
 import org.kiji.express.flow.util.ResourceUtil.withKijiTable
 import org.kiji.mapreduce.framework.KijiConfKeys
-import org.kiji.schema.ColumnVersionIterator
-import org.kiji.schema.EntityIdFactory
-import org.kiji.schema.KijiBufferedWriter
-import org.kiji.schema.KijiCell
-import org.kiji.schema.KijiDataRequest
-import org.kiji.schema.KijiDataRequestBuilder
-import org.kiji.schema.KijiRowData
-import org.kiji.schema.KijiURI
-import org.kiji.schema.MapFamilyVersionIterator
+import org.kiji.schema.{EntityId => JEntityId, _}
 import org.kiji.schema.avro.SchemaType
 import org.kiji.schema.filter.KijiColumnFilter
 import org.kiji.schema.layout.ColumnReaderSpec
 import org.kiji.schema.layout.KijiTableLayout
-import org.kiji.schema.{EntityId => JEntityId}
+import scala.Some
+import org.kiji.express.flow.framework.DirectKijiSinkContext
+import org.kiji.express.flow.framework.KijiSourceContext
+import org.kiji.schema.impl.hbase.HBaseKijiRowData
 
 /**
  * A Kiji-specific implementation of a Cascading `Scheme`, which defines how to read and write the
@@ -227,10 +222,10 @@ class KijiScheme(
 
     // Get the next row.
     if (sourceCall.getInput.next(null, rowContainer)) {
-      val row: KijiRowData = rowContainer.getContents
+      val row: HBaseKijiRowData = rowContainer.getContents.asInstanceOf[HBaseKijiRowData]
 
       // Build a tuple from this row.
-      val result: Tuple = rowToTuple(inputColumns, getSourceFields, timestampField, row)
+      val result: Tuple = resultToTuple(inputColumns, getSourceFields, timestampField, row.asKijiResult())
 
       // If no fields were missing, set the result tuple and return from this method.
       sourceCall.getIncomingEntry.setTuple(result)
@@ -389,96 +384,24 @@ object KijiScheme {
   /** Default number of qualifiers to retrieve when paging in a map type family.*/
   private val qualifierPageSize: Int = 1000
 
-  /**
-   * Converts a KijiRowData to a Cascading tuple.
-   *
-   * If there is no data in a column in this row, the value of that field in the tuple will be an
-   * empty iterable of cells.
-   *
-   * This is used in the `source` method of KijiScheme, for reading rows from Kiji into
-   * KijiExpress tuples.
-   *
-   * @param columns Mapping from field name to column definition.
-   * @param fields Field names of desired tuple elements.
-   * @param timestampField is the optional name of a field containing the timestamp that all values
-   *     in a tuple should be written to.
-   *     Use None if all values should be written at the current time.
-   * @param row to convert to a tuple.
-   * @return a tuple containing the values contained in the specified row.
-   */
-  private[express] def rowToTuple(
+  private[express] def resultToTuple(
       columns: Map[String, ColumnInputSpec],
       fields: Fields,
       timestampField: Option[Symbol],
-      row: KijiRowData
+      result: KijiResult
   ): Tuple = {
-    val result: Tuple = new Tuple()
+    val output: Tuple = new Tuple()
 
-    // Add the row's EntityId to the tuple.
-    val entityId: EntityId = EntityId.fromJavaEntityId(row.getEntityId)
-    result.add(entityId)
+    val entityId: EntityId = EntityId.fromJavaEntityId(result.getEntityId)
+    output.add(entityId)
 
-    def rowToTupleColumnFamily(cf: ColumnFamilyInputSpec) {
-      if (row.containsColumn(cf.family)) {
-        cf.pagingSpec match {
-          case PagingSpec.Off => {
-            val stream: Seq[FlowCell[_]] = row
-                .iterator(cf.family)
-                .asScala
-                .toList
-                .map { kijiCell: KijiCell[_] => FlowCell(kijiCell) }
-            result.add(stream)
-          }
-          case PagingSpec.Cells(pageSize) => {
-            def genItr(): Iterator[FlowCell[_]] = {
-              new MapFamilyVersionIterator(row, cf.family, qualifierPageSize, pageSize)
-                  .asScala
-                  .map { entry: MapFamilyVersionIterator.Entry[_] =>
-                    FlowCell(
-                        cf.family,
-                        entry.getQualifier,
-                        entry.getTimestamp,
-                        AvroUtil.avroToScala(entry.getValue))
-              }
-            }
-            result.add(new TransientStream(genItr))
-          }
-        }
-      } else {
-        result.add(Seq())
-      }
-    }
-
-    def rowToTupleQualifiedColumn(qc: QualifiedColumnInputSpec) {
-      if (row.containsColumn(qc.family, qc.qualifier)) {
-        qc.pagingSpec match {
-          case PagingSpec.Off => {
-            val stream: Seq[FlowCell[_]] = row
-                .iterator(qc.family, qc.qualifier)
-                .asScala
-                .toList
-                .map { kijiCell: KijiCell[_] => FlowCell(kijiCell) }
-            result.add(stream)
-          }
-          case PagingSpec.Cells(pageSize) => {
-            def genItr(): Iterator[FlowCell[_]] = {
-              new ColumnVersionIterator(row, qc.family, qc.qualifier, pageSize)
-                  .asScala
-                  .map { entry: java.util.Map.Entry[java.lang.Long,_] =>
-                    FlowCell(
-                      qc.family,
-                      qc.qualifier,
-                      entry.getKey,
-                      AvroUtil.avroToScala(entry.getValue)
-                    )
-                  }
-            }
-            result.add(new TransientStream(genItr))
-          }
-        }
-      } else {
-        result.add(Seq())
-      }
+    def columnIterator(
+        column: KijiColumnName
+    ): Iterator[FlowCell[_]] = {
+      result
+          .iterator(column)
+          .asScala
+          .map { kijiCell: KijiCell[_] => FlowCell(kijiCell) }
     }
 
     // Get rid of the entity id and timestamp fields, then map over each field to add a column
@@ -491,11 +414,17 @@ object KijiScheme {
         .map { field => columns(field.toString) }
         // Build the tuple, by adding each requested value into result.
         .foreach {
-          case cf: ColumnFamilyInputSpec => rowToTupleColumnFamily(cf)
-          case qc: QualifiedColumnInputSpec => rowToTupleQualifiedColumn(qc)
+          case inputSpec: ColumnInputSpec => inputSpec.pagingSpec match {
+            case PagingSpec.Off => output.add(columnIterator(inputSpec.columnName).toList)
+            case PagingSpec.Cells(pageSize) => output.add(new TransientStream(() => result
+                .iterator(inputSpec.columnName)
+                .asScala
+                .map { kCell: KijiCell[_] => FlowCell(kCell) }
+            ))
+          }
         }
 
-    result
+    output
   }
 
   /**

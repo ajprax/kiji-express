@@ -55,15 +55,15 @@ import org.kiji.express.flow.framework.KijiTap
 import org.kiji.express.flow.framework.LocalKijiScheme
 import org.kiji.express.flow.framework.LocalKijiTap
 import org.kiji.express.flow.util.ResourceUtil._
-import org.kiji.schema.EntityIdFactory
-import org.kiji.schema.Kiji
-import org.kiji.schema.KijiDataRequest
-import org.kiji.schema.KijiRowData
-import org.kiji.schema.KijiRowScanner
-import org.kiji.schema.KijiTable
+import org.kiji.schema._
 import org.kiji.schema.KijiTableReader.KijiScannerOptions
-import org.kiji.schema.KijiTableWriter
-import org.kiji.schema.KijiURI
+import org.kiji.schema.impl.hbase.HBaseKijiTableReader
+import com.twitter.scalding.Test
+import scala.Some
+import org.kiji.express.flow.framework.DirectKijiSinkContext
+import com.twitter.scalding.HadoopTest
+import com.twitter.scalding.Hdfs
+import com.twitter.scalding.Local
 
 /**
  * A read or write view of a Kiji table.
@@ -449,9 +449,11 @@ private[express] object KijiSource {
               case None => null
             }
           )
-          doAndClose(reader.getScanner(request, scannerOptions)) { scanner: KijiRowScanner =>
-            scanner.iterator().asScala.foreach { row: KijiRowData =>
-              val tuple = KijiScheme.rowToTuple(inputColumns, getSourceFields, timestampField, row)
+
+          val hbaseReader: HBaseKijiTableReader = reader.asInstanceOf[HBaseKijiTableReader]
+          doAndClose(hbaseReader.getKijiResultScanner(request, scannerOptions)) { scanner: KijiResultScanner =>
+            scanner.asScala.foreach { row: KijiResult =>
+              val tuple = KijiScheme.resultToTuple(inputColumns, getSourceFields, timestampField, row)
 
               val newTupleValues = tuple
                   .iterator()

@@ -64,6 +64,7 @@ import org.kiji.schema.KijiTableReader
 import org.kiji.schema.KijiURI
 import org.kiji.schema.layout.ColumnReaderSpec
 import org.kiji.schema.{EntityId => JEntityId}
+import org.kiji.schema.impl.hbase.HBaseKijiRowData
 
 /**
  * Encapsulates the state required to read from a Kiji table locally, for use in
@@ -212,8 +213,8 @@ private[express] case class LocalKijiScheme(
     val context: InputContext = sourceCall.getContext
     if (context.iterator.hasNext) {
       // Get the current row.
-      val row: KijiRowData = context.iterator.next()
-      val result: Tuple = KijiScheme.rowToTuple(inputColumns, getSourceFields, timestampField, row)
+      val row: HBaseKijiRowData = context.iterator.next().asInstanceOf[HBaseKijiRowData]
+      val result: Tuple = KijiScheme.resultToTuple(inputColumns, getSourceFields, timestampField, row.asKijiResult())
 
       // Set the result tuple and return from this method.
       sourceCall.getIncomingEntry.setTuple(result)
