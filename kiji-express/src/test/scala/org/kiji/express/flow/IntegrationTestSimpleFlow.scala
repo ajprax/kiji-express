@@ -100,7 +100,7 @@ class IntegrationTestSimpleFlow extends AbstractKijiIntegrationTest {
                     .withFamily("info")
                         .withQualifier("name").withValue("name2")
                         .withQualifier("email").withValue("email2")
-            .build()
+            .build().release()
 
         class Job(args: Args) extends KijiJob(args) {
           KijiInput.builder
