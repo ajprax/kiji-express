@@ -26,7 +26,10 @@ import org.apache.hadoop.mapred.JobConf
 import org.junit.Test
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import com.twitter.scalding._
+import com.twitter.scalding.Args
+import com.twitter.scalding.Hdfs
+import com.twitter.scalding.Mode
+import com.twitter.scalding.NullSource
 import org.junit.Assert
 
 import org.kiji.schema.Kiji
@@ -34,8 +37,6 @@ import org.kiji.schema.KijiURI
 import org.kiji.schema.shell.api.Client
 import org.kiji.schema.testutil.AbstractKijiIntegrationTest
 import org.kiji.schema.util.InstanceBuilder
-import cascading.flow.{Flow, FlowListener}
-import com.twitter.scalding.Hdfs
 
 class IntegrationTestSimpleFlow extends AbstractKijiIntegrationTest {
   private final val Log: Logger = LoggerFactory.getLogger(classOf[IntegrationTestSimpleFlow])
@@ -99,57 +100,19 @@ class IntegrationTestSimpleFlow extends AbstractKijiIntegrationTest {
                     .withFamily("info")
                         .withQualifier("name").withValue("name2")
                         .withQualifier("email").withValue("email2")
-            .build().release()
+            .build()
 
         class Job(args: Args) extends KijiJob(args) {
-          val stat: Stat = Stat("name", "counter")
-
           KijiInput.builder
               .withTableURI(table.getURI.toString)
               .withColumns("info:email" -> 'email)
               .build
-              .groupAll { group => stat.inc; group.size() }
+              .groupAll { group => group.size() }
               .debug
               .write(NullSource)
-
-          override def listeners: List[FlowListener] = {
-            val statListener: FlowListener = new FlowListener {
-              override def onStopping(flow: Flow[_]): Unit = {}
-
-              override def onStarting(flow: Flow[_]): Unit = {}
-
-              override def onThrowable(flow: Flow[_], throwable: Throwable): Boolean = false
-
-              override def onCompleted(flow: Flow[_]): Unit = {
-                val stats = flow.getFlowStats.getCounterValue("counter", "name")
-                println("found stats: %s".format(stats))
-              }
-            }
-            statListener :: super.listeners
-          }
         }
         val args = Mode.putMode(Hdfs(false, conf = new JobConf(getConf)), Args(List()))
-
-
-//        val c = new JobConf(getConf)
-//
-//
-//        val j = new Job(args)
-//        j.uniqueId
-//        j.name
-//        // Get start and end time manually like in MR
-//
-//        j.mode match {
-//          case Hdfs(_, conf) => conf
-//          case _ => println("non-hadoop express job, not logging to job history.")
-//        }
-
-
-
-        val job: Job = new Job(args)
-        Assert.assertTrue(job.counters.isEmpty)
-        Assert.assertTrue(job.run)
-        println(job.counters)
+        Assert.assertTrue(new Job(args).run)
       } finally {
         table.release()
       }

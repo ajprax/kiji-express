@@ -20,6 +20,7 @@
 package org.kiji.express.flow
 
 import scala.collection.JavaConverters.collectionAsScalaIterableConverter
+import scala.collection.JavaConverters.mapAsJavaMapConverter
 import scala.collection.JavaConverters.mapAsScalaMapConverter
 
 import java.util.Properties
@@ -32,6 +33,7 @@ import cascading.pipe.Pipe
 import cascading.pipe.assembly.AggregateBy
 import cascading.tap.Tap
 import cascading.tuple.collect.SpillableProps
+import com.google.common.base.Preconditions
 import com.twitter.chill.config.ConfiguredInstantiator
 import com.twitter.chill.config.ScalaMapConfig
 import com.twitter.scalding.Args
@@ -56,6 +58,9 @@ import org.kiji.express.flow.framework.hfile.HFileKijiTap
 import org.kiji.express.flow.framework.serialization.KijiKryoInstantiator
 import org.kiji.express.flow.util.AvroTupleConversions
 import org.kiji.express.flow.util.PipeConversions
+import org.kiji.mapreduce.framework.JobHistoryKijiTable
+import org.kiji.schema.Kiji
+import org.kiji.schema.KijiURI
 
 /**
  * KijiJob is KijiExpress's extension of Scalding's `Job`, and users should extend it when writing
@@ -176,18 +181,102 @@ class KijiJob(args: Args)
         .+("mapred.child.java.opts" -> (oldJavaOptions + disableValidation))
   }
 
-  private[express] def counters: Set[(String, String, Long)] = {
-    listeners.collect {
-      case cl: CounterListener => cl.counters
-    }.headOption.getOrElse(Set())
-  }
+
+  private val counterListener: CounterListener = new CounterListener
+  private[express] def counters: Set[(String, String, Long)] = counterListener.counters
 
   override def listeners: List[FlowListener] = {
-    new CounterListener :: super.listeners
+    counterListener :: super.listeners
+  }
+
+  private def recordJobHistory(startTime: Long, endTime: Long, jobSuccess: Boolean) {
+    def maybeGetTableUri(t: Tap[_, _, _]): Option[String] = {
+      t match {
+        case kt: KijiTap => Some(kt.tableUri)
+        case lkt: LocalKijiTap => Some(lkt.tableUri)
+        case hfkt: HFileKijiTap => Some(hfkt.tableUri)
+        case _ => None
+      }
+    }
+
+    val conf: Option[Configuration] = mode match {
+      case Hdfs(_, c) => Some(c)
+      case HadoopTest(c, _) => Some(c)
+      case _ => None
+    }
+
+    val counterMap: Map[java.lang.String, java.lang.Long] = counters.map {
+      triple: (String, String, Long) => {
+        val (group, counter, count) = triple
+        ("%s:%s".format(group, counter), count: java.lang.Long)
+      }
+    }.toMap
+
+    val extendedInfo: Map[String, String] = args.list(KijiJob.extendedInfoArgsKey).map {
+      s: String => {
+        val splits: Array[String] = s.split(':')
+        Preconditions.checkState(splits.size == 2, "Too many ':'s in argument: %s", s)
+        (splits(0), splits(1))
+      }
+    }.toMap
+    println("extended info: %s".format(extendedInfo))
+
+    val instanceUris: Set[KijiURI] = (flowDef.getSources.asScala.toList ++ flowDef.getSinks.asScala).map {
+      case pair: (String, Tap[_, _, _]) => maybeGetTableUri(pair._2)
+    }.collect { case Some(x) => x }.toSet.map { uriString: String => KijiURI.newBuilder(uriString).build() }
+
+    instanceUris.foreach { uri: KijiURI =>
+      val kiji: Kiji = if (conf.isDefined) Kiji.Factory.open(uri, conf.get) else Kiji.Factory.open(uri)
+      try {
+        recordJobHistory(startTime, endTime, jobSuccess, conf.getOrElse(null), kiji, counterMap, extendedInfo)
+      } finally {
+        kiji.release()
+      }
+    }
+  }
+
+  private def recordJobHistory(
+      startTime: Long,
+      endTime: Long,
+      jobSuccess: Boolean,
+      conf: Configuration,
+      kiji: Kiji,
+      counterMap: Map[String, java.lang.Long],
+      extendedInfo: Map[String, String]
+  ) {
+    val jobHistoryTable: JobHistoryKijiTable = JobHistoryKijiTable.open(kiji)
+    try {
+      jobHistoryTable.recordJob(
+          uniqueId.get,
+          name,
+          startTime,
+          endTime,
+          jobSuccess,
+          conf,
+          counterMap.asJava,
+          extendedInfo.asJava
+      )
+    } finally {
+      jobHistoryTable.close()
+    }
+  }
+
+  override def run: Boolean = {
+    val startTime: Long = System.currentTimeMillis()
+    val jobSuccess: Boolean = super.run
+    val endTime: Long = System.currentTimeMillis()
+    recordJobHistory(startTime, endTime, jobSuccess)
+    return jobSuccess
   }
 }
 
 object KijiJob {
+  /**
+   * Specify a list of 'key:value' pairs to have them recorded into the Job History table entry for
+   * this job. Keys may not contain ':'.
+   */
+  val extendedInfoArgsKey: String = "extendedInfo"
+
   private[express] class CounterListener extends FlowListener {
     private var _counters: Set[(String, String, Long)] = Set()
     def counters: Set[(String, String, Long)] = _counters
